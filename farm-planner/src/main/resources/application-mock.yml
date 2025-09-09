@@ -1,0 +1,9 @@
+server:
+  port: 8080
+
+app:
+  # Use your real email so Nominatim can contact you if needed (their policy asks for a real identifier)
+  nominatimUserAgent: "FarmPlanner/0.1 (ajdnfjla@gmail.com)"
+
+  # Official Worcester County Parcels layer (polygon parcels including Acres & ACCTID)
+  worcesterParcelsLayerUrl: "https://wcg-gisweb.co.worcester.md.us/arcgis/rest/services/Parcels/MapServer/5"
