@@ -1,47 +1,44 @@
 package com.example.farm_planner.parcel;
 
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.http.HttpHeaders;
 import org.springframework.stereotype.Service;
 import org.springframework.web.reactive.function.client.WebClient;
+import org.springframework.web.util.UriComponentsBuilder;
 
 import com.example.farm_planner.parcel.dto.NominatimResult;
 
 import reactor.core.publisher.Mono;
 
-/**
- * Turns a street address into [lat, lon] using Nominatim (OpenStreetMap).
- * We return a Mono<double[]> with {lat, lon}.
- */
+/** Wraps Nominatim (OpenStreetMap) geocoding. Returns [lat, lon] for a given address. */
 @Service
 public class GeocoderService {
 
   private final WebClient http;
+  private final String userAgent;
 
-  public GeocoderService(WebClient http) {
+  public GeocoderService(WebClient http,
+                         @Value("${app.nominatimUserAgent:FarmPlanner/0.1 (dev@example.com)}") String userAgent) {
     this.http = http;
+    this.userAgent = userAgent;
   }
 
-  /**
-   * Geocode an address and return the first result as [lat, lon].
-   * If no result is found, the Mono completes empty.
-   */
   public Mono<double[]> geocodeOne(String address) {
-    // Nominatim Search API docs: https://nominatim.org/release-docs/latest/api/Search/
+    var uri = UriComponentsBuilder
+        .fromUriString("https://nominatim.openstreetmap.org/search")
+        .queryParam("format", "jsonv2")
+        .queryParam("limit", "1")
+        .queryParam("addressdetails", "0")
+        .queryParam("q", address)
+        .build(true)   // keep existing encoding
+        .toUri();
+
     return http.get()
-        .uri(uri -> uri
-            .scheme("https")
-            .host("nominatim.openstreetmap.org")
-            .path("/search")
-            .queryParam("format", "jsonv2")
-            .queryParam("limit", "1")
-            .queryParam("addressdetails", "0")
-            .queryParam("q", address)
-            .build())
+        .uri(uri)
+        .header(HttpHeaders.USER_AGENT, userAgent)
         .retrieve()
         .bodyToFlux(NominatimResult.class)
-        .next() // first item or empty if none
-        .map(r -> new double[] {
-            Double.parseDouble(r.lat()),
-            Double.parseDouble(r.lon())
-        });
+        .next()
+        .map(r -> new double[] { Double.parseDouble(r.lat()), Double.parseDouble(r.lon()) });
   }
 }

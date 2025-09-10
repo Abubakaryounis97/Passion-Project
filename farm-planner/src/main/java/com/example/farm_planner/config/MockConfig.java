@@ -1,10 +1,11 @@
 package com.example.farm_planner.config;
 
+import java.util.Map;
+
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Primary;
 import org.springframework.context.annotation.Profile;
-import org.springframework.web.reactive.function.client.WebClient;
 
 import com.example.farm_planner.parcel.GeocoderService;
 import com.example.farm_planner.parcel.ParcelService;
@@ -12,52 +13,52 @@ import com.example.farm_planner.parcel.dto.ParcelResponse;
 
 import reactor.core.publisher.Mono;
 
-import java.util.HashMap;
-import java.util.Map;
-
+/**
+ * Provides mock services when the "mock" profile is active.
+ * Run with:  -Dspring-boot.run.profiles=mock
+ */
 @Configuration
 @Profile("mock")
 public class MockConfig {
 
+  /** Mock geocoder returns fixed coords near Snow Hill, MD. */
   @Bean
   @Primary
-  GeocoderService geocoderMock() {
-    return new GeocoderService(WebClient.create()) {
+  GeocoderService mockGeocoderService() {
+    return new GeocoderService(null, "FarmPlanner/0.1 (mock)") {
       @Override
       public Mono<double[]> geocodeOne(String address) {
-        // Return a fixed point (lat, lon)
-        return Mono.just(new double[] { 38.075, -75.568 });
+        // Lat/Lon near Snow Hill
+        return Mono.just(new double[] { 38.1779, -75.3924 });
       }
     };
   }
 
+  /** Mock parcel service returns a tiny square polygon and fake attributes. */
   @Bean
   @Primary
-  ParcelService parcelServiceMock() {
-    return new ParcelService(WebClient.create()) {
+  ParcelService mockParcelService() {
+    return new ParcelService(null, "mock://layer") {
       @Override
       public Mono<ParcelResponse> findByPoint(double lat, double lon) {
-        return Mono.just(sampleResponse("MOCK123"));
+        return Mono.just(mockParcel());
       }
 
       @Override
       public Mono<ParcelResponse> findByAcctId(String acctId) {
-        return Mono.just(sampleResponse(acctId));
+        return Mono.just(mockParcel());
       }
 
-      private ParcelResponse sampleResponse(String acctId) {
-        Map<String,Object> geom = new HashMap<>();
-        geom.put("type", "Polygon");
-        // Simple triangle polygon in lon/lat (GeoJSON standard)
-        geom.put("coordinates", new Object[] { new Object[] {
-          new double[] { -75.57, 38.07 },
-          new double[] { -75.56, 38.07 },
-          new double[] { -75.565, 38.075 },
-          new double[] { -75.57, 38.07 }
-        }});
-        return new ParcelResponse(acctId, 12.34, geom);
+      private ParcelResponse mockParcel() {
+        // Simple square polygon around a point
+        Map<String, Object> geometry = Map.of(
+            "type", "Polygon",
+            "coordinates", new double[][][] {
+                { { -75.3926, 38.1778 }, { -75.3922, 38.1778 }, { -75.3922, 38.1780 }, { -75.3926, 38.1780 }, { -75.3926, 38.1778 } }
+            }
+        );
+        return new ParcelResponse("MOCK123", 5.25, geometry);
       }
     };
   }
 }
-

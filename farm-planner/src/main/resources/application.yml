@@ -1,12 +1,23 @@
 server:
   port: 8080
 
-app:
-  # Required by Nominatim; use a real email
-  nominatimUserAgent: "FarmPlanner/0.1 (younis@zipcode.rock)"
-  # Worcester County Parcels layer (polygon parcels with Acres + ACCTID)
-  worcesterParcelsLayerUrl: "https://wcg-gisweb.co.worcester.md.us/arcgis/rest/services/Parcels/MapServer/5"
-
 spring:
   application:
     name: farm-planner
+  main:
+    web-application-type: reactive
+
+app:
+  # Required by Nominatim; must include a real contact per their policy
+  nominatimUserAgent: "FarmPlanner/0.1 (your-email@example.com)"
+  # Worcester County Parcels layer (polygon parcels with Acres + ACCTID)
+  worcesterParcelsLayerUrl: "https://wcg-gisweb.co.worcester.md.us/arcgis/rest/services/Parcels/MapServer/5"
+
+  auth:
+    username: user
+    password: user
+
+  cors:
+    allowedOrigins:
+      - http://localhost:5173
+      - http://localhost:3000
