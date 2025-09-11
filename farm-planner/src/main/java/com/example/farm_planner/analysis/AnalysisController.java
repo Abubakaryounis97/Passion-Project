@@ -45,19 +45,24 @@ public class AnalysisController {
 
         return geocoderService.geocode(address)          // Mono<double[]> (lat, lon)
             .flatMap(this::toLatLon)                     // Mono<LatLon>
-            .flatMap(latlon -> parcelService.findByPoint(latlon.lat(), latlon.lon()))
-            .switchIfEmpty(Mono.just((ParcelResponse) null))
-            .map(parcel -> {
-                QuickAnalysisResult fit = analysisService.fit(parcel);
-                if (!fit.found()) {
-                    return ResponseEntity.ok(Map.of(
-                        "found", false,
-                        "address", address,
-                        "messages", fit.messages()
-                    ));
-                }
-                return ResponseEntity.ok(fit);
-            })
+            .flatMap(latlon -> parcelService.findByPoint(latlon.lat(), latlon.lon())
+                .map(parcel -> {
+                    QuickAnalysisResult fit = analysisService.fit(parcel);
+                    if (!fit.found()) {
+                        return ResponseEntity.ok(Map.of(
+                            "found", false,
+                            "address", address,
+                            "messages", fit.messages()
+                        ));
+                    }
+                    return ResponseEntity.ok(fit);
+                })
+                .defaultIfEmpty(ResponseEntity.ok(Map.of(
+                    "found", false,
+                    "address", address,
+                    "messages", List.of("Parcel not found.")
+                )))
+            )
             .onErrorResume(ex -> Mono.just(ResponseEntity.ok(Map.of(
                 "found", false,
                 "address", address,

@@ -110,7 +110,7 @@ public class ParcelService {
 
   private ParcelResponse toParcelResponse(GeoJsonFeatureCollection.Feature f) {
     Map<String, Object> props = f.properties;
-    String acct = firstNonNullString(props, List.of("ACCOUNTID", "ACCOUNT", "ACCT", "AcctId"));
+    String acct = firstNonNullString(props, List.of("ACCTID", "ACCOUNTID", "ACCOUNT", "ACCT", "AcctId"));
     Double acres = toDouble(firstNonNull(props, List.of("ACRES", "Acres")));
     // geometry is passed through as-is (GeoJSON shape)
     return new ParcelResponse(acct, acres, f.geometry);
