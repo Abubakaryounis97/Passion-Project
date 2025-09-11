@@ -1,0 +1,7 @@
+# worcester.yaml
+chickenHouse:
+  width: 66
+  length: 650
+  limit: 40000
+  maxHouses: 8
+  setback: 200  # 200 feet setback for Worcester County as well

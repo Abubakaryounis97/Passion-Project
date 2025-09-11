@@ -19,3 +19,10 @@ app:
     allowedOrigins:
       - http://localhost:5173
       - http://localhost:3000
+# application.yaml
+chickenHouse:
+  width: 60
+  length: 560
+  limit: 40000
+  maxHouses: 16
+  setback: 200  # 200 feet default setback

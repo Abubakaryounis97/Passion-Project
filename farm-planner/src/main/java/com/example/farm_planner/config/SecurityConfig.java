@@ -39,8 +39,11 @@ public class SecurityConfig {
         cfg.setAllowCredentials(true);
         return cfg;
       }))
-      // Keep CSRF ON for browser clients; send token via cookie
-      .csrf(csrf -> csrf.csrfTokenRepository(CookieCsrfTokenRepository.withHttpOnlyFalse()))
+      // Dev: ignore CSRF for API routes so static test.html can POST without token
+      .csrf(csrf -> csrf
+        .csrfTokenRepository(CookieCsrfTokenRepository.withHttpOnlyFalse())
+        .ignoringRequestMatchers("/api/**")
+      )
       // Session-based auth (cookie)
       .sessionManagement(sm -> sm.sessionCreationPolicy(SessionCreationPolicy.IF_REQUIRED))
       // URL rules
@@ -48,6 +51,10 @@ public class SecurityConfig {
         .requestMatchers(HttpMethod.POST, "/api/auth/login").permitAll()
         .requestMatchers(HttpMethod.POST, "/api/parcels/search").permitAll() // keep open for now
         .requestMatchers(HttpMethod.GET, "/api/parcels/**").permitAll()      // keep open for now
+        .requestMatchers(HttpMethod.POST, "/api/analysis/**").permitAll()    // allow analysis POSTs during dev
+        // static assets and test page
+        .requestMatchers(HttpMethod.GET, "/", "/index.html", "/test.html", "/favicon.ico",
+            "/**/*.css", "/**/*.js", "/**/*.map", "/**/*.png", "/**/*.jpg", "/**/*.svg").permitAll()
         .requestMatchers("/actuator/health", "/error").permitAll()
         .anyRequest().authenticated()
       )

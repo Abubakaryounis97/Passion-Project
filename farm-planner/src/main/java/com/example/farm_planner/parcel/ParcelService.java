@@ -5,6 +5,7 @@ import java.util.List;
 import java.util.Map;
 
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.http.HttpStatusCode;
 import org.springframework.stereotype.Service;
 import org.springframework.util.LinkedMultiValueMap;
 import org.springframework.util.MultiValueMap;
@@ -53,13 +54,19 @@ public class ParcelService {
 
     URI uri = UriComponentsBuilder.fromUriString(layerUrl + "/query")
         .queryParams(q)
-        .build(true)
+        .build()
+        .encode()
         .toUri();
 
     return http.get()
         .uri(uri)
-        .retrieve()
-        .bodyToMono(GeoJsonFeatureCollection.class)
+        .exchangeToMono(resp -> {
+          HttpStatusCode sc = resp.statusCode();
+          if (sc.is2xxSuccessful()) {
+            return resp.bodyToMono(GeoJsonFeatureCollection.class);
+          }
+          return Mono.empty();
+        })
         .flatMap(fc -> {
           if (fc == null || fc.features == null || fc.features.isEmpty()) return Mono.empty();
           var f = fc.features.get(0);
@@ -81,13 +88,19 @@ public class ParcelService {
 
     URI uri = UriComponentsBuilder.fromUriString(layerUrl + "/query")
         .queryParams(q)
-        .build(true)
+        .build()
+        .encode()
         .toUri();
 
     return http.get()
         .uri(uri)
-        .retrieve()
-        .bodyToMono(GeoJsonFeatureCollection.class)
+        .exchangeToMono(resp -> {
+          HttpStatusCode sc = resp.statusCode();
+          if (sc.is2xxSuccessful()) {
+            return resp.bodyToMono(GeoJsonFeatureCollection.class);
+          }
+          return Mono.empty();
+        })
         .flatMap(fc -> {
           if (fc == null || fc.features == null || fc.features.isEmpty()) return Mono.empty();
           var f = fc.features.get(0);

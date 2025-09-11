@@ -8,6 +8,7 @@ import org.springframework.web.util.UriComponentsBuilder;
 
 import com.example.farm_planner.parcel.dto.NominatimResult;
 
+import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
 /** Wraps Nominatim (OpenStreetMap) geocoding. Returns [lat, lon] for a given address. */
@@ -30,15 +31,23 @@ public class GeocoderService {
         .queryParam("limit", "1")
         .queryParam("addressdetails", "0")
         .queryParam("q", address)
-        .build(true)   // keep existing encoding
+        .build()
+        .encode()
         .toUri();
 
     return http.get()
         .uri(uri)
         .header(HttpHeaders.USER_AGENT, userAgent)
-        .retrieve()
-        .bodyToFlux(NominatimResult.class)
+        .exchangeToFlux(resp -> resp.statusCode().is2xxSuccessful()
+            ? resp.bodyToFlux(NominatimResult.class)
+            : Flux.empty())
+        .onErrorResume(e -> Flux.empty())
         .next()
         .map(r -> new double[] { Double.parseDouble(r.lat()), Double.parseDouble(r.lon()) });
+  }
+
+  /** Convenience alias for older call sites. */
+  public Mono<double[]> geocode(String address) {
+    return geocodeOne(address);
   }
 }
