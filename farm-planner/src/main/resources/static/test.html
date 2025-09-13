@@ -25,10 +25,11 @@
     <div class="card">
       <h2>Parcel Search</h2>
       <label>Address</label>
-      <input id="addr" value="217 W Green St, Snow Hill, MD" />
+      <input id="addr" value="9898 Seahawk Rd, Berlin, MD 21811" />
       <div class="row">
         <button id="btnSearch">Search Parcel</button>
         <button id="btnQuick">Run Quick Analysis</button>
+        <button id="btnPlace">Show Houses</button>
       </div>
       <pre id="parcelJson"></pre>
       <h3>Quick Analysis Result</h3>
@@ -54,11 +55,210 @@
     const map = L.map('map').setView([38.18,-75.39], 12);
     L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png').addTo(map);
     let parcelLayer;
+    let lastQuickFit = null; // store last quick analysis result for econ assess
+    let housesLayer;         // layer group for placed houses
+    let lastParcelPoly = null; // { outer: [{lat,lon}], holes: [[{lat,lon}], ...] }
 
     function renderGeoJSON(geo){
       if (parcelLayer) map.removeLayer(parcelLayer);
       parcelLayer = L.geoJSON(geo).addTo(map);
       try { map.fitBounds(parcelLayer.getBounds()); } catch{}
+
+      // Extract primary polygon (largest area) with holes for placement and clear houses
+      lastParcelPoly = extractPrimaryPolygon(parcelLayer);
+      if (housesLayer) { map.removeLayer(housesLayer); housesLayer = null; }
+    }
+
+    // Extract the largest polygon from the layer with its holes
+    function extractPrimaryPolygon(layer){
+      let best = null; // { outer, holes, area }
+      layer.eachLayer(l => {
+        if (!(l instanceof L.Polygon)) return;
+        const ll = l.getLatLngs();
+        // Normalize: MultiPolygon -> [ [rings], ... ]; Polygon -> [rings]
+        const polys = (Array.isArray(ll[0]) && Array.isArray(ll[0][0])) ? ll : [ll];
+        for (const poly of polys){
+          if (!Array.isArray(poly) || poly.length === 0) continue;
+          const outerLL = poly[0];
+          const holesLL = poly.slice(1);
+          const outer = outerLL.map(pt => ({lat: pt.lat, lon: pt.lng}));
+          const holes = holesLL.map(r => r.map(pt => ({lat: pt.lat, lon: pt.lng})));
+          const area = Math.abs(polygonArea(outer));
+          if (!best || area > best.area) best = { outer, holes, area };
+        }
+      });
+      return best ? { outer: best.outer, holes: best.holes } : null;
+    }
+
+    // Signed area via shoelace (in degrees^2)
+    function polygonArea(ring){
+      let a = 0; const n = ring.length;
+      for (let i=0, j=n-1; i<n; j=i++) a += (ring[j].lon * ring[i].lat) - (ring[i].lon * ring[j].lat);
+      return 0.5 * a;
+    }
+
+    function feetPerDegree(lat){
+      const ftPerDegLat = 364000; // approx
+      const ftPerDegLon = 364000 * Math.cos(lat * Math.PI/180);
+      return {ftPerDegLat, ftPerDegLon};
+    }
+
+    // Simple point-in-polygon (ray casting); polygon: array of {lat,lon}
+    function isPointInPolygon(pt, polygon){
+      let inside = false;
+      for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
+        const xi = polygon[i].lon, yi = polygon[i].lat;
+        const xj = polygon[j].lon, yj = polygon[j].lat;
+        const intersect = ((yi > pt.lat) !== (yj > pt.lat)) &&
+          (pt.lon < (xj - xi) * (pt.lat - yi) / ((yj - yi) || 1e-12) + xi);
+        if (intersect) inside = !inside;
+      }
+      return inside;
+    }
+
+    // Outer must contain; none of the holes may contain
+    function isInsideParcel(pt){
+      if (!lastParcelPoly) return false;
+      if (!isPointInPolygon(pt, lastParcelPoly.outer)) return false;
+      for (const hole of (lastParcelPoly.holes || [])){
+        if (isPointInPolygon(pt, hole)) return false;
+      }
+      return true;
+    }
+
+    async function fetchRules(){
+      try{
+        const res = await fetch(`${API_BASE}/api/rules`);
+        if (!res.ok) return null;
+        return await res.json();
+      }catch{ return null; }
+    }
+
+    async function placeHouses(){
+      if (!lastQuickFit || !lastQuickFit.found) { alert('Run Quick Analysis first'); return; }
+      if (!lastParcelPoly) { alert('No parcel geometry to place houses.'); return; }
+      const polygon = lastParcelPoly.outer;
+      const houses = Math.max(0, +lastQuickFit.maxHouses || 0);
+      if (houses === 0) { alert('No houses fit on this parcel.'); return; }
+
+      const rules = await fetchRules();
+      const widthFt = (rules && rules.houseWidthFt) ? +rules.houseWidthFt : 66;
+      const lengthFt = (rules && rules.houseLengthFt) ? +rules.houseLengthFt : 650;
+      const aisleFt = 50; // spacing between houses
+
+      // Choose an orientation: try longest edge bearing, 90 deg, and fallbacks 0/90
+      const {thetaGuess, bbox} = estimateOrientationAndBBox(polygon);
+      const angles = uniqueAngles([thetaGuess, thetaGuess + Math.PI/2, 0, Math.PI/2]);
+
+      const results = angles.map(a => ({ angle:a, centers: planPlacement(polygon, a, widthFt, lengthFt, aisleFt, houses, bbox, true) }));
+      results.sort((p,q)=> q.centers.length - p.centers.length);
+      const best = results[0];
+      const centers = planPlacement(polygon, best.angle, widthFt, lengthFt, aisleFt, houses, bbox, false);
+
+      if (housesLayer) { map.removeLayer(housesLayer); }
+      housesLayer = L.layerGroup().addTo(map);
+      drawRectangles(centers, best.angle, widthFt, lengthFt);
+
+      if (centers.length < houses) {
+        console.warn(`Placed ${centers.length}/${houses} houses for angle ${(best.angle*180/Math.PI).toFixed(1)}°.`);
+      }
+    }
+
+    function uniqueAngles(arr){
+      const norm = a => ((a % (Math.PI*2)) + Math.PI*2) % (Math.PI*2);
+      const out=[]; for (const a of arr){ const na=norm(a); if(!out.some(b=>Math.abs(norm(b)-na)<1e-6)) out.push(na);} return out;
+    }
+
+    function estimateOrientationAndBBox(polygon){
+      let minLat=+Infinity,maxLat=-Infinity,minLon=+Infinity,maxLon=-Infinity;
+      for (const p of polygon){
+        if (p.lat < minLat) minLat = p.lat;
+        if (p.lat > maxLat) maxLat = p.lat;
+        if (p.lon < minLon) minLon = p.lon;
+        if (p.lon > maxLon) maxLon = p.lon;
+      }
+      const lat0 = (minLat + maxLat)/2;
+      const {ftPerDegLat, ftPerDegLon} = feetPerDegree(lat0);
+      // Find longest edge bearing using local feet metric
+      let bestLen=0, theta=0;
+      for (let i=0;i<polygon.length-1;i++){
+        const a=polygon[i], b=polygon[i+1];
+        const eFeet=(b.lon-a.lon)*ftPerDegLon; // east component feet
+        const nFeet=(b.lat-a.lat)*ftPerDegLat; // north component feet
+        const len=Math.hypot(eFeet,nFeet);
+        if(len>bestLen){ bestLen=len; theta=Math.atan2(nFeet,eFeet); }
+      }
+      return { thetaGuess: theta, bbox: {minLat,maxLat,minLon,maxLon,lat0,ftPerDegLat,ftPerDegLon} };
+    }
+
+    function planPlacement(polygon, theta, widthFt, lengthFt, aisleFt, houses, bbox, simulate){
+      const {minLat,maxLat,minLon,maxLon,lat0,ftPerDegLat,ftPerDegLon} = bbox;
+      // Axis unit vectors in EN feet: len axis (cos,sin), wid axis (-sin,cos)
+      const c=Math.cos(theta), s=Math.sin(theta);
+      const stepLenFt = lengthFt + aisleFt;
+      const stepWidFt = widthFt + aisleFt;
+      const halfLen = lengthFt/2, halfWid = widthFt/2;
+      // Convert to degree step vectors
+      const dLen = { dlon: (stepLenFt*c)/ftPerDegLon, dlat: (stepLenFt*s)/ftPerDegLat };
+      const dWid = { dlon: (-stepWidFt*s)/ftPerDegLon, dlat: (stepWidFt*c)/ftPerDegLat };
+      const halfLenVec = { dlon: (halfLen*c)/ftPerDegLon, dlat: (halfLen*s)/ftPerDegLat };
+      const halfWidVec = { dlon: (-halfWid*s)/ftPerDegLon, dlat: (halfWid*c)/ftPerDegLat };
+
+      // Search grid size estimate (in feet, project AABB onto axes)
+      const widthFeet = (maxLon-minLon)*ftPerDegLon;
+      const heightFeet = (maxLat-minLat)*ftPerDegLat;
+      const spanLenFt = Math.abs(c)*widthFeet + Math.abs(s)*heightFeet;
+      const spanWidFt = Math.abs(s)*widthFeet + Math.abs(c)*heightFeet;
+      const nI = Math.min(200, Math.max(1, Math.ceil(spanLenFt/stepLenFt) + 2));
+      const nJ = Math.min(200, Math.max(1, Math.ceil(spanWidFt/stepWidFt) + 2));
+
+      // Start near bottom-left of AABB with a small margin
+      const marginFt = 25;
+      const origin = { lat: minLat + (marginFt/ftPerDegLat), lon: minLon + (marginFt/ftPerDegLon) };
+
+      const centers=[];
+      // Try two phase offsets to reduce alignment artifacts
+      const phases = [ {oi:0, oj:0}, {oi:0.5, oj:0.5} ];
+      for (const ph of phases){
+        for (let i=0; i<nI && centers.length < houses; i++){
+          for (let j=0; j<nJ && centers.length < houses; j++){
+            const lat = origin.lat + (i+ph.oi)*dLen.dlat + (j+ph.oj)*dWid.dlat;
+            const lon = origin.lon + (i+ph.oi)*dLen.dlon + (j+ph.oj)*dWid.dlon;
+            // Quick reject by AABB with padding
+            if (lat < minLat-1e-6 || lat > maxLat+1e-6 || lon < minLon-1e-6 || lon > maxLon+1e-6) continue;
+            const center = {lat, lon};
+            const corners = [
+              {lat: lat - halfLenVec.dlat - halfWidVec.dlat, lon: lon - halfLenVec.dlon - halfWidVec.dlon},
+              {lat: lat - halfLenVec.dlat + halfWidVec.dlat, lon: lon - halfLenVec.dlon + halfWidVec.dlon},
+              {lat: lat + halfLenVec.dlat + halfWidVec.dlat, lon: lon + halfLenVec.dlon + halfWidVec.dlon},
+              {lat: lat + halfLenVec.dlat - halfWidVec.dlat, lon: lon + halfLenVec.dlon - halfWidVec.dlon}
+            ];
+            if (!isInsideParcel(center) || corners.some(c => !isInsideParcel(c))) continue;
+            centers.push(center);
+          }
+        }
+        if (centers.length >= houses) break;
+      }
+      return simulate ? centers.slice(0) : centers;
+    }
+
+    function drawRectangles(centers, theta, widthFt, lengthFt){
+      // Compute degree offsets for half-dim vectors once per center lat
+      for (const c of centers){
+        const {ftPerDegLat, ftPerDegLon} = feetPerDegree(c.lat);
+        const halfLen = lengthFt/2, halfWid = widthFt/2;
+        const ct=Math.cos(theta), st=Math.sin(theta);
+        const halfLenVec = { dlon: (halfLen*ct)/ftPerDegLon, dlat: (halfLen*st)/ftPerDegLat };
+        const halfWidVec = { dlon: (-halfWid*st)/ftPerDegLon, dlat: (halfWid*ct)/ftPerDegLat };
+        const rect = [
+          [c.lat - halfLenVec.dlat - halfWidVec.dlat, c.lon - halfLenVec.dlon - halfWidVec.dlon],
+          [c.lat - halfLenVec.dlat + halfWidVec.dlat, c.lon - halfLenVec.dlon + halfWidVec.dlon],
+          [c.lat + halfLenVec.dlat + halfWidVec.dlat, c.lon + halfLenVec.dlon + halfWidVec.dlon],
+          [c.lat + halfLenVec.dlat - halfWidVec.dlat, c.lon + halfLenVec.dlon - halfWidVec.dlon],
+          [c.lat - halfLenVec.dlat - halfWidVec.dlat, c.lon - halfLenVec.dlon - halfWidVec.dlon]
+        ];
+        L.polygon(rect, {color:'#ffcc00', weight:1, fillColor:'#ffcc00', fillOpacity:0.35}).addTo(housesLayer);
+      }
     }
 
     function xsrfHeaders(){
@@ -95,16 +295,49 @@
           credentials:'include',body:JSON.stringify({address:addr})});
         const txt=await res.text();
         out.textContent = res.ok ? txt : `HTTP ${res.status} ${res.statusText}\n\n`+txt;
+        // Try to capture the quick fit result for later econ assessment
+        try {
+          const data = JSON.parse(txt);
+          lastQuickFit = data;
+        } catch(e) {
+          lastQuickFit = null;
+        }
       }catch(e){ out.textContent='Error '+e; }
     };
 
+    document.getElementById('btnPlace').onclick = async () => {
+      try { await placeHouses(); } catch(e) { console.error(e); alert('Failed to place houses: '+e); }
+    };
+
     document.getElementById('btnEcon').onclick = async () => {
-      const payload={workers:+workers.value,weeklyPayPerWorker:+pay.value,landPrice:+price.value,downPaymentPct:dpct.value?+dpct.value:null,downPaymentAmount:damt.value?+damt.value:null,annualInterestRatePct:+rate.value,years:+years.value};
+      // Validate we have a quick analysis result first
+      if (!lastQuickFit) {
+        document.getElementById('econJson').textContent = 'Please run Quick Analysis first.';
+        return;
+      }
+      // Convert down payment % input from percent to fraction if provided
+      const dpctVal = dpct.value ? (+dpct.value / 100) : null;
+      const payload={
+        fit: lastQuickFit,
+        workers:+workers.value,
+        weeklyPayPerWorker:+pay.value,
+        landPrice:+price.value,
+        downPaymentPct: dpctVal,
+        downPaymentAmount: damt.value?+damt.value:null,
+        annualInterestRatePct:+rate.value,
+        years:+years.value
+      };
       const out=document.getElementById('econJson');
       out.textContent='Loading…';
       try{
-        const res=await fetch(`${API_BASE}/api/analysis/econ/assess`,{method:'POST',headers:{'Content-Type':'application/json'},credentials:'include',body:JSON.stringify(payload)});
-        out.textContent=await res.text();
+        const res=await fetch(`${API_BASE}/api/analysis/econ/assess`,{
+          method:'POST',
+          headers:{'Content-Type':'application/json'},
+          credentials:'include',
+          body:JSON.stringify(payload)
+        });
+        const txt = await res.text();
+        out.textContent = res.ok ? txt : `HTTP ${res.status} ${res.statusText}\n\n`+txt;
       }catch(e){out.textContent='Error '+e;}
     };
   </script>
