@@ -6,17 +6,35 @@
   <title>Farm Planner — Demo</title>
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin="" />
   <style>
-    body { font-family: sans-serif; margin:0; background:#0b1020; color:#eaf0ff; }
-    header { padding:10px; background:#121a33; }
-    h1 { font-size:18px; margin:0; }
-    .wrap { display:grid; grid-template-columns: 380px 1fr; gap:12px; padding:12px; }
-    .card { background:#121a33; border-radius:12px; padding:12px; }
-    #map { height:480px; }
-    pre { background:#0f1730; padding:10px; border-radius:8px; overflow:auto; }
-    label { font-size:12px; display:block; margin-top:6px; }
-    input { width:100%; padding:6px; margin-bottom:6px; }
-    button { padding:8px; margin-top:6px; }
-    @media(max-width:960px){.wrap{grid-template-columns:1fr;}#map{height:320px}}
+    :root{
+      --bg:#0b1020; --panel:#121a33; --panel-2:#0f1730; --text:#eaf0ff;
+      --muted:#9fb2e1; --accent:#6aa3ff; --border: rgba(255,255,255,0.08);
+    }
+    * { box-sizing: border-box; }
+    body { font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, "Helvetica Neue", Arial; margin:0; background:var(--bg); color:var(--text); }
+    header { padding:14px 16px; background:linear-gradient(180deg, #121a33, #0f1730); border-bottom:1px solid var(--border); }
+    h1 { font-size:18px; margin:0; letter-spacing:.3px; }
+    h2 { font-size:15px; margin: 6px 0 10px; color: var(--muted); font-weight:600; }
+    h3 { font-size:13px; margin: 12px 0 6px; color: var(--muted); font-weight:600; }
+    .wrap { display:grid; grid-template-columns: 420px 1fr; gap:14px; padding:14px; }
+    .card { background:var(--panel); border:1px solid var(--border); border-radius:12px; padding:14px; box-shadow: 0 1px 0 rgba(0,0,0,0.2), 0 8px 24px rgba(0,0,0,0.25); }
+    #map { height:520px; border-radius:10px; overflow:hidden; border:1px solid var(--border); }
+    .row { display:flex; gap:8px; flex-wrap:wrap; margin:8px 0 6px; }
+    label { font-size:12px; display:block; margin-top:8px; color: var(--muted); }
+    input { width:100%; padding:10px 12px; margin-top:6px; border-radius:10px; border:1px solid var(--border); background:var(--panel-2); color:var(--text); outline:none; transition: border-color .15s ease, box-shadow .15s ease; }
+    input:focus { border-color: rgba(106,163,255,.6); box-shadow: 0 0 0 3px rgba(106,163,255,.15); }
+    button { padding:10px 12px; border-radius:10px; border:1px solid var(--border); background: linear-gradient(180deg, #1a244a, #142244); color: var(--text); cursor:pointer; font-weight:600; letter-spacing:.2px; transition: transform .05s ease, filter .15s ease, border-color .15s ease; }
+    button:hover { filter: brightness(1.08); border-color: rgba(106,163,255,.5); }
+    button:active { transform: translateY(1px); }
+    pre { background:var(--panel-2); padding:12px; border-radius:10px; border:1px solid var(--border); overflow:auto; line-height:1.45; font-size:12.5px; }
+    pre.empty { color: #7f8fb7; font-style: italic; }
+    /* JSON syntax highlighting */
+    .json-view .key { color:#8ab4ff; }
+    .json-view .string { color:#b5f4a5; }
+    .json-view .number { color:#ffd399; }
+    .json-view .boolean { color:#ffb5c3; }
+    .json-view .null { color:#a0a8b8; font-style: italic; }
+    @media(max-width:1100px){.wrap{grid-template-columns:1fr;}#map{height:360px}}
   </style>
 </head>
 <body>
@@ -31,7 +49,7 @@
         <button id="btnQuick">Run Quick Analysis</button>
         <button id="btnPlace">Show Houses</button>
       </div>
-      <pre id="parcelJson"></pre>
+      <pre id="parcelJson" class="json-view empty">No response yet.</pre>
       <h3>Quick Analysis Result</h3>
       <h2>Economics</h2>
       <label>Workers</label><input id="workers" type="number" value="6" />
@@ -42,7 +60,7 @@
       <label>Interest rate %</label><input id="rate" type="number" step="0.01" value="6.5" />
       <label>Years</label><input id="years" type="number" value="20" />
       <button id="btnEcon">Compute</button>
-      <pre id="econJson"></pre>
+      <pre id="econJson" class="json-view empty">No response yet.</pre>
     </div>
     <div class="card">
       <h2>Map</h2>
@@ -51,6 +69,30 @@
   </div>
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
   <script>
+    // Presentation helpers for JSON output
+    function escapeHtml(str){
+      return str.replace(/[&<>\"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;','\'':'&#39;'}[c]));
+    }
+    function highlightJSON(jsonString){
+      const esc = escapeHtml(jsonString);
+      return esc
+        .replace(/(^|\n)(\s*)\"([^\"]+)\"(\s*):/g, (m, a, b, key, c) => `${a}${b}<span class="key">"${key}"</span>${c}:`)
+        .replace(/:\s*\"([^\"]*)\"/g, (m) => m.replace(/\"([^\"]*)\"/, (mm, v) => `"<span class=\"string\">${v}</span>"`))
+        .replace(/\b(true|false)\b/g, '<span class="boolean">$1</span>')
+        .replace(/\bnull\b/g, '<span class="null">null</span>')
+        .replace(/(?<=[:\s\[])(-?\d+(?:\.\d+)?)(?=\s*[,\]\n])/g, '<span class="number">$1</span>');
+    }
+    function renderJSONPre(el, rawText){
+      el.classList.remove('empty');
+      try{
+        const obj = JSON.parse(rawText);
+        const pretty = JSON.stringify(obj, null, 2);
+        el.innerHTML = highlightJSON(pretty);
+      }catch{
+        el.textContent = rawText;
+      }
+    }
+    function setLoading(el, text){ el.classList.remove('empty'); el.textContent = text; }
     const API_BASE = (location.protocol === 'file:') ? 'http://localhost:8080' : '';
     const map = L.map('map').setView([38.18,-75.39], 12);
     L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png').addTo(map);
@@ -269,7 +311,7 @@
     document.getElementById('btnSearch').onclick = async () => {
       const addr=document.getElementById('addr').value;
       const out=document.getElementById('parcelJson');
-      out.textContent='Loading…';
+      setLoading(out, 'Loading…');
       try{
         const controller = new AbortController();
         const t = setTimeout(()=>controller.abort(), 12000);
@@ -278,9 +320,8 @@
           credentials:'include',signal:controller.signal,body:JSON.stringify({address:addr})});
         clearTimeout(t);
         const txt=await res.text();
-        out.textContent = res.ok ? txt : `HTTP ${res.status} ${res.statusText}
-
-`+txt;
+        const body = res.ok ? txt : `HTTP ${res.status} ${res.statusText}\n\n`+txt;
+        renderJSONPre(out, body);
         try{const d=JSON.parse(txt);const geo=d.geometry||d.data?.geometry||(d.type==='FeatureCollection'?d:null);if(geo)renderGeoJSON(geo);}catch{}
       }catch(e){ out.textContent='Network error: '+(e.name==='AbortError'?'timeout':'')+' '+e; }
     };
@@ -288,13 +329,14 @@
     document.getElementById('btnQuick').onclick = async () => {
       const addr=document.getElementById('addr').value;
       const out=document.getElementById('parcelJson');
-      out.textContent='Loading quick analysis…';
+      setLoading(out, 'Loading quick analysis…');
       try{
         const res=await fetch(`${API_BASE}/api/analysis/quick`,{
           method:'POST',headers:{'Content-Type':'application/json'},
           credentials:'include',body:JSON.stringify({address:addr})});
         const txt=await res.text();
-        out.textContent = res.ok ? txt : `HTTP ${res.status} ${res.statusText}\n\n`+txt;
+        const body = res.ok ? txt : `HTTP ${res.status} ${res.statusText}\n\n`+txt;
+        renderJSONPre(out, body);
         // Try to capture the quick fit result for later econ assessment
         try {
           const data = JSON.parse(txt);
@@ -328,7 +370,7 @@
         years:+years.value
       };
       const out=document.getElementById('econJson');
-      out.textContent='Loading…';
+      setLoading(out, 'Loading…');
       try{
         const res=await fetch(`${API_BASE}/api/analysis/econ/assess`,{
           method:'POST',
@@ -337,7 +379,8 @@
           body:JSON.stringify(payload)
         });
         const txt = await res.text();
-        out.textContent = res.ok ? txt : `HTTP ${res.status} ${res.statusText}\n\n`+txt;
+        const body = res.ok ? txt : `HTTP ${res.status} ${res.statusText}\n\n`+txt;
+        renderJSONPre(out, body);
       }catch(e){out.textContent='Error '+e;}
     };
   </script>
